@@ -15,6 +15,9 @@ import time
 
 from . import dht11, dsm501a, mq2, mq135
 
+# sensors/live_aqi.py
+
+INDOOR_PM_CALIBRATION = 0.5  # try 0.5 first, then tune
 
 # -------- Helpers --------
 
@@ -36,13 +39,23 @@ def _scaled_index(value: float, good_level: float, bad_level: float) -> float:
 
 # US style AQI breakpoints for particles
 PM25_BREAKPOINTS = [
-    (0.0,   12.0,   0,   50),
-    (12.1,  35.4,  51,  100),
-    (35.5,  55.4, 101,  150),
-    (55.5, 150.4, 151,  200),
-    (150.5, 250.4, 201, 300),
-    (250.5, 500.4, 301, 500),
+    (0.0,  12.0,   0,   50),
+    (12.1, 35.4,  51,  100),
+    (35.5, 55.4, 101,  150),
+    (55.5, 150.4,151,  200),
+    (150.5,250.4,201,  300),
+    (250.5,500.4,301,  500),
 ]
+
+INDOOR_PM25_BREAKPOINTS = [
+    (0.0,   24.0,   0,   50),
+    (24.1,  70.8,  51,  100),
+    (70.9, 110.8, 101,  150),
+    (110.9,300.8, 151, 200),
+    (300.9,500.8, 201, 300),
+    (500.9,1000.8,301, 500),
+]
+
 
 PM10_BREAKPOINTS = [
     (0.0,   54.0,   0,   50),
@@ -53,6 +66,14 @@ PM10_BREAKPOINTS = [
     (425.0, 604.0, 301, 500),
 ]
 
+INDOOR_PM10_BREAKPOINTS = [
+    (0.0,   24.0,   0,   50),
+    (24.1,  70.8,  51,  100),
+    (70.9, 110.8, 101,  150),
+    (110.9,300.8, 151, 200),
+    (300.9,500.8, 201, 300),
+    (500.9,1000.8,301, 500),
+]
 
 def _aqi_from_pm(value: float, breakpoints) -> float:
     """Convert μg/m3 to AQI using the given breakpoint table."""
@@ -101,13 +122,19 @@ def compute_live_metrics() -> Dict[str, Any]:
     temp = dht.get("temperature_c")
     humid = dht.get("humidity_percent")
 
-    # DSM501A concentration_ug_m3 is used as PM2.5 approximation.
-    pm2_5 = dsm.get("concentration_ug_m3")
-    if pm2_5 is None:
+        # DSM501A concentration_ug_m3 is used as PM2.5 approximation.
+    pm2_5_raw = dsm.get("concentration_ug_m3")
+
+    if pm2_5_raw is None:
+        pm2_5 = None
         pm10 = None
     else:
+        # Apply simple indoor calibration
+        pm2_5 = pm2_5_raw * INDOOR_PM_CALIBRATION
+
         # Very simple approximation: PM10 a bit higher than PM2.5.
         pm10 = pm2_5 * 1.2
+
 
     # MQ2 and MQ135 voltages
     mq2_voltage = mq2_r.get("voltage")
@@ -121,12 +148,12 @@ def compute_live_metrics() -> Dict[str, Any]:
     flammable_index = _scaled_index(mq2_voltage or 0.0, good_level=0.5, bad_level=3.0)
 
     # Particle AQIs
-    pm25_aqi = _aqi_from_pm(pm2_5 or 0.0, PM25_BREAKPOINTS)
-    pm10_aqi = _aqi_from_pm(pm10 or 0.0, PM10_BREAKPOINTS)
+    pm25_aqi = _aqi_from_pm(pm2_5, INDOOR_PM25_BREAKPOINTS)
+    pm10_aqi = _aqi_from_pm(pm10 or 0.0, INDOOR_PM10_BREAKPOINTS)
 
     # Combined AQI for live display - PM only
     combined_aqi = max(pm25_aqi, pm10_aqi)
-
+    
     # Human readable status
     if combined_aqi <= 50:
         status = "Good"
@@ -143,12 +170,16 @@ def compute_live_metrics() -> Dict[str, Any]:
 
     return {
         "ts": ts_now,
-
-        # Direct environmental metrics
         "temperature_c": temp,
         "humidity_percent": humid,
+
+        # Calibrated values used for AQI
         "pm2_5_ug_m3": pm2_5,
         "pm10_ug_m3": pm10,
+
+        # Raw values from the sensor for debugging
+        "pm2_5_ug_m3_raw": pm2_5_raw,
+        # you can also add pm10_raw if you want
 
         # Gas indices (for separate cards)
         "toxic_index": toxic_index,

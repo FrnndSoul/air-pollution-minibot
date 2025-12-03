@@ -9,7 +9,7 @@ from flask_cors import CORS
 from sensors import dht11, mq2, mq135, dsm501a, live_aqi
 from resources import store, read as read_db
 from resources import settings as settings_store
-from ai import aqi
+from ai import aqi, prediction
 
 # ---------- Paths ----------
 
@@ -151,12 +151,11 @@ def api_dashboard():
         "ts": metrics["ts"],
     })
 
-
 # ---------- Predictive AQI ----------
 
 @app.get("/api/aqi/forecast")
 def api_aqi_forecast():
-    result = aqi.compute_aqi_forecast()
+    result = prediction.compute_aqi_forecast()
     return jsonify(result)
 
 # ---------- Settings ----------
