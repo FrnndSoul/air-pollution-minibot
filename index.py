@@ -6,6 +6,7 @@ import time
 import csv
 import io
 import xlsxwriter
+from flask import jsonify, Response
 
 from flask import Flask, jsonify, request
 from flask_cors import CORS
@@ -14,6 +15,7 @@ from sensors import dht11, mq2, mq135, dsm501a, live_aqi
 from resources import store, read as read_db
 from resources import settings as settings_store
 from ai import aqi, prediction
+from resources.email import ALERT_DB_PATH, _ensure_alert_log_table
 from resources.spike import Reading, handle_new_reading_for_dashboard
 import datetime as dt
 
@@ -299,6 +301,74 @@ def api_history_download():
 
   except Exception as e:
       return jsonify({"ok": False, "error": str(e)}), 500
+
+# --------- Alerts ----------
+@app.get("/api/alerts")
+def api_alerts():
+    alerts = []
+    try:
+        # Make sure the DB file and table exist
+        _ensure_alert_log_table()
+
+        with sqlite3.connect(ALERT_DB_PATH) as conn:
+            conn.row_factory = sqlite3.Row
+            cur = conn.execute(
+                """
+                SELECT id, ts, recipient, subject
+                FROM email_alert_logs
+                ORDER BY ts DESC
+                LIMIT 100
+                """
+            )
+            rows = cur.fetchall()
+            alerts = [
+                {
+                    "id": row["id"],
+                    "ts": row["ts"],
+                    "recipient": row["recipient"],
+                    "subject": row["subject"],
+                }
+                for row in rows
+            ]
+    except Exception as e:
+        print("Error reading alerts:", type(e).__name__, e)
+        return jsonify({"ok": False, "error": "failed_to_read_alerts"}), 500
+
+    return jsonify({"ok": True, "alerts": alerts})
+@app.get("/api/alerts/<int:alert_id>/download")
+def api_alert_download(alert_id: int):
+    try:
+        # Make sure the DB file and table exist
+        _ensure_alert_log_table()
+
+        with sqlite3.connect(ALERT_DB_PATH) as conn:
+            conn.row_factory = sqlite3.Row
+            cur = conn.execute(
+                """
+                SELECT id, ts, recipient, subject, alert_msg
+                FROM email_alert_logs
+                WHERE id = ?
+                """,
+                (alert_id,),
+            )
+            row = cur.fetchone()
+    except Exception as e:
+        print("Error reading alert body:", type(e).__name__, e)
+        return jsonify({"ok": False, "error": "failed_to_read_alert"}), 500
+
+    if row is None:
+        return jsonify({"ok": False, "error": "not_found"}), 404
+
+    body = row["alert_msg"] or ""
+    filename = f"alert_{row['id']}.txt"
+
+    return Response(
+        body,
+        mimetype="text/plain",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"'
+        },
+    )
 
 # ---------- Main ----------
 
