@@ -1,7 +1,11 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 import pathlib
+import sqlite3
 import time
+import csv
+import io
+import xlsxwriter
 
 from flask import Flask, jsonify, request
 from flask_cors import CORS
@@ -42,7 +46,8 @@ CORS(app)
 @app.before_first_request
 def init_db():
     store.ensure_tables()
-
+    store.ensure_dashboard_table()
+    settings_store.init_db()
 
 # ---------- API ----------
 
@@ -98,9 +103,9 @@ def api_dsm501a():
 
 
 # ---------- Single combined dashboard endpoint ----------
-
 @app.get("/api/dashboard")
 def api_dashboard():
+    # Compute live metrics (AQI, PM, indexes etc)
     metrics = live_aqi.compute_live_metrics()
 
     # Load refresh_rate from settings
@@ -110,34 +115,38 @@ def api_dashboard():
         refresh_rate = max(1, int(settings["refresh_rate"]))  # enforce min 1 sec
 
     try:
-        dht = raw.get("dht11") or {}
+        # Read each sensor directly and log raw data
+        dht = dht11.read()
         store.insert_dht11(
             temperature_c=dht.get("temperature_c"),
             humidity_percent=dht.get("humidity_percent"),
-            ts=dht.get("ts", ts),
+            ts=dht.get("ts"),
         )
 
-        mq2_r = raw.get("mq2") or {}
+        mq2_r = mq2.read()
         store.insert_mq2(
             raw=mq2_r.get("raw"),
             voltage=mq2_r.get("voltage"),
-            ts=mq2_r.get("ts", ts),
+            ts=mq2_r.get("ts"),
         )
 
-        mq135_r = raw.get("mq135") or {}
+        mq135_r = mq135.read()
         store.insert_mq135(
             raw=mq135_r.get("raw"),
             voltage=mq135_r.get("voltage"),
-            ts=mq135_r.get("ts", ts),
+            ts=mq135_r.get("ts"),
         )
 
-        dsm = sensors.dsm501a.read(sample_sec=refresh_rate)
+        dsm = dsm501a.read(sample_sec=refresh_rate)
         store.insert_dsm501a(
             low_pulse_ms=dsm.get("low_pulse_ms"),
             ratio=dsm.get("ratio"),
             concentration_ug_m3=dsm.get("concentration_ug_m3"),
             ts=dsm.get("ts"),
         )
+
+        # Log combined dashboard snapshot into dashboard_readings
+        store.insert_dashboard_reading(metrics, ts=metrics.get("ts"))
 
     except Exception as e:
         print("Error logging dashboard sensor data:", e)
@@ -163,10 +172,6 @@ def api_aqi_forecast():
     return jsonify(result)
 
 # ---------- Settings ----------
-@app.before_first_request
-def init_db():
-    store.ensure_tables()
-    settings_store.init_db()
 
 @app.get("/api/settings/latest")
 def api_get_settings():
@@ -219,6 +224,47 @@ def api_settings_save():
         return jsonify({"ok": True})
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 400
+
+#---------- History Access ----------
+@app.post("/api/history/query")
+def api_history_query():
+    try:
+        data = request.get_json(force=True)
+        start_ts = int(data.get("start"))
+        end_ts = int(data.get("end"))
+
+        # Only return the combined dashboard table for the new UI
+        rows = read_db.fetch_range("dashboard_readings", start_ts, end_ts)
+
+        return jsonify({
+            "ok": True,
+            "data": {
+                "dashboard_readings": rows
+            }
+        })
+
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 400
+@app.get("/api/history/download")
+def api_history_download():
+  fmt = request.args.get("fmt", "csv")
+
+  try:
+      content, content_type, filename = read_db.export_dashboard_history(fmt)
+
+      return content, 200, {
+          "Content-Type": content_type,
+          "Content-Disposition": f"attachment; filename={filename}",
+      }
+
+  except ImportError as e:
+      return jsonify({"ok": False, "error": str(e)}), 500
+
+  except ValueError as e:
+      return jsonify({"ok": False, "error": str(e)}), 400
+
+  except Exception as e:
+      return jsonify({"ok": False, "error": str(e)}), 500
 
 # ---------- Main ----------
 

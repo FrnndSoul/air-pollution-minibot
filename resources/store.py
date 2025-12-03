@@ -3,6 +3,7 @@ import sqlite3
 import time
 from pathlib import Path
 from typing import Optional
+import io
 
 BASE_DIR = Path(__file__).resolve().parent
 SENSOR_DB_PATH = BASE_DIR / "sensor.db"
@@ -172,3 +173,83 @@ def insert_dsm501a(
         conn.commit()
     finally:
         conn.close()
+
+def ensure_dashboard_table() -> None:
+    """
+    Create the combined dashboard_readings table if it does not exist.
+    """
+    conn = _connect()
+    cur = conn.cursor()
+
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS dashboard_readings (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ts INTEGER,
+            aqi REAL,
+            pm25 REAL,
+            pm10 REAL,
+            temp REAL,
+            humidity REAL,
+            toxic REAL,
+            flammable REAL,
+            smoke REAL,
+            voc REAL
+        )
+        """
+    )
+
+    conn.commit()
+    conn.close()
+
+def insert_dashboard_reading(metrics: dict, ts: Optional[int] = None) -> None:
+    """
+    Insert one combined dashboard row using computed metrics.
+
+    metrics is the dict returned by live_aqi.compute_live_metrics()
+    or equivalent. If ts is not given, current unix time is used.
+    """
+    if ts is None:
+        ts = int(time.time())
+
+    try:
+        conn = _connect()
+        cur = conn.cursor()
+
+        cur.execute(
+            """
+            INSERT INTO dashboard_readings (
+                ts,
+                aqi,
+                pm25,
+                pm10,
+                temp,
+                humidity,
+                toxic,
+                flammable,
+                smoke,
+                voc
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                ts,
+                metrics.get("aqi"),
+                metrics.get("pm2_5_ug_m3"),
+                metrics.get("pm10_ug_m3"),
+                metrics.get("temperature_c"),
+                metrics.get("humidity_percent"),
+                metrics.get("toxic_index"),
+                metrics.get("flammable_index"),
+                metrics.get("smoke_index"),
+                metrics.get("voc_index"),
+            ),
+        )
+        conn.commit()
+    except Exception as e:
+        print("Error inserting into dashboard_readings:", e)
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
