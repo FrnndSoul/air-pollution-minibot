@@ -103,8 +103,11 @@ def api_dsm501a():
 def api_dashboard():
     metrics = live_aqi.compute_live_metrics()
 
-    raw = metrics.get("raw") or {}
-    ts = metrics.get("ts") or int(time.time())
+    # Load refresh_rate from settings
+    settings = settings_store.get_latest_settings()
+    refresh_rate = 1
+    if settings and settings.get("refresh_rate"):
+        refresh_rate = max(1, int(settings["refresh_rate"]))  # enforce min 1 sec
 
     try:
         dht = raw.get("dht11") or {}
@@ -128,13 +131,14 @@ def api_dashboard():
             ts=mq135_r.get("ts", ts),
         )
 
-        dsm = raw.get("dsm501a") or {}
+        dsm = sensors.dsm501a.read(sample_sec=refresh_rate)
         store.insert_dsm501a(
             low_pulse_ms=dsm.get("low_pulse_ms"),
             ratio=dsm.get("ratio"),
             concentration_ug_m3=dsm.get("concentration_ug_m3"),
-            ts=dsm.get("ts", ts),
+            ts=dsm.get("ts"),
         )
+
     except Exception as e:
         print("Error logging dashboard sensor data:", e)
 
@@ -159,43 +163,62 @@ def api_aqi_forecast():
     return jsonify(result)
 
 # ---------- Settings ----------
+@app.before_first_request
+def init_db():
+    store.ensure_tables()
+    settings_store.init_db()
 
 @app.get("/api/settings/latest")
 def api_get_settings():
     try:
-        s = read_db.get_latest_settings()
+        s = settings_store.get_latest_settings()
 
         if s is None:
-            return jsonify({
-                "ok": True,
-                "settings": {
-                    "email": None,
-                    "notifications": False,
-                    "forecast_duration": None,
-                    "refresh_rate": None,
-                    "ts": None,
+            # No row yet: return sensible defaults
+            return jsonify(
+                {
+                    "ok": True,
+                    "settings": {
+                        "email": None,
+                        "notifications": False,
+                        "forecast_duration": None,
+                        "refresh_rate": None,
+                        "ts": None,
+                    }
                 }
-            })
+            )
 
         return jsonify({"ok": True, "settings": s})
 
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
 
+
 @app.post("/api/settings/save")
 def api_settings_save():
     try:
         data = request.get_json(force=True) or {}
+
+        email = data.get("email")
+        notifications = bool(data.get("notifications"))
+
+        fd = data.get("forecast_duration")
+        rr = data.get("refresh_rate")
+
+        # Coerce numeric values if present
+        forecast_duration = int(fd) if fd not in (None, "") else None
+        refresh_rate = int(rr) if rr not in (None, "") else None
+
         settings_store.save_settings(
-            email=data.get("email"),
-            notifications=bool(data.get("notifications")),
-            forecast_duration=data.get("forecast_duration"),
-            refresh_rate=data.get("refresh_rate"),
+            email=email,
+            notifications=notifications,
+            forecast_duration=forecast_duration,
+            refresh_rate=refresh_rate,
         )
+
         return jsonify({"ok": True})
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 400
-
 
 # ---------- Main ----------
 

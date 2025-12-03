@@ -14,6 +14,7 @@ from typing import Dict, Any
 import time
 
 from . import dht11, dsm501a, mq2, mq135
+from resources import settings as settings_store
 
 # sensors/live_aqi.py
 
@@ -114,7 +115,12 @@ def compute_live_metrics() -> Dict[str, Any]:
     dht = dht11.read()
     mq2_r = mq2.read()
     mq135_r = mq135.read()
-    dsm = dsm501a.read()
+    settings = settings_store.get_latest_settings()
+    refresh_rate = 1  # fallback
+    if settings and settings.get("refresh_rate"):
+        refresh_rate = max(1, int(settings["refresh_rate"]))
+
+    dsm = dsm501a.read(sample_sec=refresh_rate)
 
     ts_now = int(time.time())
 

@@ -3,10 +3,9 @@ import time
 import RPi.GPIO as GPIO
 
 DSM_PIN = 24
-SAMPLE_SEC = 5   # set to 30 later; short for testing
+DEFAULT_SAMPLE_SEC = 5
 
 _initialized = False
-
 
 def _ensure_setup():
     global _initialized
@@ -17,8 +16,11 @@ def _ensure_setup():
         _initialized = True
 
 
-def read():
+def read(sample_sec: int = None):
     _ensure_setup()
+
+    # use custom sample time or fall back to default
+    SAMPLE_SEC = sample_sec if sample_sec is not None else DEFAULT_SAMPLE_SEC
 
     start = time.time()
     low_time = 0
