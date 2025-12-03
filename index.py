@@ -14,6 +14,8 @@ from sensors import dht11, mq2, mq135, dsm501a, live_aqi
 from resources import store, read as read_db
 from resources import settings as settings_store
 from ai import aqi, prediction
+from resources.spike import Reading, handle_new_reading_for_dashboard
+import datetime as dt
 
 # ---------- Paths ----------
 
@@ -148,6 +150,37 @@ def api_dashboard():
         # Log combined dashboard snapshot into dashboard_readings
         store.insert_dashboard_reading(metrics, ts=metrics.get("ts"))
 
+        # ------------------------------------------------------------------
+        # SPIKE DETECTION + EMAIL NOTIFICATION
+        # ------------------------------------------------------------------
+        # Get last N readings to compute baseline + trend
+        rows = store.get_recent_dashboard_readings(limit=60)
+
+        # Convert rows to Reading objects for spike handler
+        history = []
+        for row in rows:
+            history.append(
+                Reading(
+                    timestamp=row["ts"],
+                    values={
+                        "aqi": row.get("aqi"),
+                        "pm25": row.get("pm2_5"),
+                        "pm10": row.get("pm10"),
+                        "temp": row.get("temperature"),
+                        "humidity": row.get("humidity"),
+                        "toxic": row.get("toxic"),
+                        "flammable": row.get("flammable"),
+                        "smoke": row.get("smoke"),
+                        "voc": row.get("voc"),
+                    },
+                )
+            )
+
+        # Trigger the spike handler
+        handle_new_reading_for_dashboard(history)
+
+        # ------------------------------------------------------------------
+
     except Exception as e:
         print("Error logging dashboard sensor data:", e)
 
@@ -245,6 +278,7 @@ def api_history_query():
 
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 400
+      
 @app.get("/api/history/download")
 def api_history_download():
   fmt = request.args.get("fmt", "csv")
